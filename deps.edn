@@ -22,6 +22,9 @@
    :extra-deps  {nrepl                      {:mvn/version "0.6.0"}
                  vvvvalvalval/scope-capture {:mvn/version "0.3.2"}}}
 
+  :datomic-client
+  {:extra-deps {com.datomic/client-pro {:mvn/version "0.9.63"}}}
+
   :datomic-free
   {:extra-deps {com.datomic/datomic-free {:mvn/version "0.9.5697"
                                           :exclusions  [org.slf4j/jcl-over-slf4j

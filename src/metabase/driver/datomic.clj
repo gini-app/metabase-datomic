@@ -6,6 +6,7 @@
             [toucan.db :as db]
             [clojure.tools.logging :as log]))
 
+; don't need this anymore since metabase is already updated
 (require 'metabase.driver.datomic.monkey-patch)
 
 (driver/register! :datomic)
@@ -57,6 +58,11 @@
    :db.type/uuid    :type/UUID       ;; Value type for UUIDs. Maps to java.util.UUID on Java platforms.
    :db.type/uri     :type/URL        ;; Value type for URIs. Maps to java.net.URI on Java platforms.
    :db.type/bytes   :type/Array      ;; Value type for small binary data. Maps to byte array on Java platforms. See limitations.
+
+   ;; TODO(alan) Unhandled types
+   ;; :db.type/symbol
+   ;; :db.type/tuple
+   ;; :db.type/uri    causes error on FE (Reader can't process tag object)
    })
 
 (defn column-name [table-name col]
@@ -81,11 +87,13 @@
             :database-type "db.type/ref"
             :base-type     :type/PK
             :pk?           true}}
-         (into (for [[col type] cols]
+         (into (for [[col type] cols
+                     :let [mb-type (datomic->metabase-type type)]
+                     :when mb-type]
                  {:name          (column-name table-name col)
                   :database-type (util/kw->str type)
-                  :base-type     (datomic->metabase-type type)
-                  :special-type  (datomic->metabase-type type)}))
+                  :base-type     mb-type
+                  :special-type  mb-type}))
          (into (for [[rel-name {:keys [_path target]}] rels]
                  {:name          (name rel-name)
                   :database-type "metabase.driver.datomic/path"

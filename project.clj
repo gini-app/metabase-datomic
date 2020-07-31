@@ -1,4 +1,4 @@
-(defproject metabase/datomic-driver "1.0.0-SNAPSHOT-0.9.5697"
+(defproject metabase/datomic-driver "0.32.10.mb-0.9.63.dc-SNAPSHOT"
   :min-lein-version "2.5.0"
 
   :plugins [[lein-tools-deps "0.4.3"]]
@@ -10,7 +10,14 @@
   {:provided
    {:dependencies [[metabase-core "1.0.0-SNAPSHOT"]]}
 
-   :datomic-free {:lein-tools-deps/config {:aliases [:datomic-free]}}
+   :datomic-free
+   {:lein-tools-deps/config {:aliases [:datomic-free]}}
+
+   :datomic-client
+   {:lein-tools-deps/config {:aliases [:datomic-client]}
+    :repositories
+    {"my.datomic.com" {:url "https://my.datomic.com/repo"}}}
+
    :datomic-pro
    {:lein-tools-deps/config {:aliases [:datomic-pro]}
     :repositories

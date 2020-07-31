@@ -54,7 +54,9 @@
     "db.alter"
     "db.excise"
     "db.install"
-    "db.sys"})
+    "db.sys"
+    "db.attr"
+    "db.entity"})
 
 (defn attributes
   "Query db for all attribute entities."
@@ -73,6 +75,7 @@
 (defn derive-table-names
   "Find all \"tables\" i.e. all namespace prefixes used in attribute names."
   [db]
+  ;; TODO(alan) Use pattern match to remove all datomic reserved prefixes
   (remove reserved-prefixes
           (keys (attrs-by-table db))))
 
