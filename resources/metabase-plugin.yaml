@@ -1,20 +1,42 @@
 info:
   name: Metabase Datomic Driver
-  version: 1.0.0-SNAPSHOT-0.9.5697
-  description: Allows Metabase to connect to Datomic databases.
+  version: 0.32.10.mb-0.9.63.dc
+  description: Connect to Datomic databases using Client API.
 driver:
-  name: datomic
-  display-name: Datomic
-  lazy-load: true
-  connection-properties:
-    - name: db
-      display-name: URL
-      placeholder: datomic:mem://metabase_dev
-      required: true
-    - name: config
-      display-name: Configuration EDN
-      placeholder: "{}"
-      required: true
+  - name: datomic
+    display-name: Datomic
+    lazy-load: true
+    connection-properties:
+      - name: db
+        display-name: URL
+        placeholder: datomic:mem://metabase_dev
+        required: true
+      - name: config
+        display-name: Configuration EDN
+        placeholder: "{}"
+        required: true
+  - name: datomic-client
+    display-name: Datomic client
+    lazy-load: true
+    connection-properties:
+      - name: endpoint
+        display-name: Endpoint
+        placeholder: localhost:8998
+        required: true
+      - name: access-key
+        display-name: Access key
+        placeholder: key
+        required: true
+      - name: secret
+        display-name: Secret
+        placeholder: secret
+        required: true
+      - name: db-name
+        display-name: Database name
+        placeholder: db-name
+        required: true
 init:
   - step: load-namespace
     namespace: metabase.driver.datomic
+  - step: load-namespace
+    namespace: metabase.driver.datomic-client
