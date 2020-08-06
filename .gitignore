@@ -5,3 +5,4 @@ repl
 scratch.clj
 *.db
 .lein-repl-history
+.idea

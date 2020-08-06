@@ -17,10 +17,9 @@
                 metabase-core       {:mvn/version "1.0.0-SNAPSHOT"
                                      :scope       "provided"}}}
 
-  :dev
-  {:extra-paths ["../metabase-datomic/dev"]
-   :extra-deps  {nrepl                      {:mvn/version "0.6.0"}
-                 vvvvalvalval/scope-capture {:mvn/version "0.3.2"}}}
+  :metabase-local
+  {:extra-deps {metabase/metabase {:local/root "../metabase"
+                                   :deps/manifest :deps}}}
 
   :datomic-client
   {:extra-deps {com.datomic/client-pro {:mvn/version "0.9.63"}}}
@@ -38,6 +37,13 @@
                                                        org.slf4j/jul-to-slf4j
                                                        org.slf4j/log4j-over-slf4j
                                                        org.slf4j/slf4j-nop]}}}
+
+  :datomic-local
+  {:extra-deps {com.datomic/dev-local      {:mvn/version "0.9.183"}}}
+
+  :dev
+  {:extra-paths ["../metabase-datomic/dev"]
+   :extra-deps  {vvvvalvalval/scope-capture {:mvn/version "0.3.2"}}}
 
   :test
   {:extra-paths ["../metabase/src"
