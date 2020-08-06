@@ -162,3 +162,16 @@
   (let [result (datomic.qp/execute-query native-query)]
     (swap! query-history conj result)
     result))
+
+
+(comment
+  (driver/describe-database
+   :datomic
+   {:details {:db "datomic:dev://localhost:4334/m13n"}})
+
+  (driver/describe-table
+   :datomic
+   {:details {:db "datomic:dev://localhost:4334/m13n"}}
+   {:name "merchant"})
+
+  )
