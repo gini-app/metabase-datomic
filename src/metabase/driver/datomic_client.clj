@@ -113,28 +113,22 @@
   "Given the name of a \"table\" (attribute namespace prefix), find all attribute
   names that occur in entities that have an attribute with this prefix."
   [db table]
-  (let [attrs (get (attrs-by-table db) table)]
-    (-> #{}
-        (into (map (juxt :db/ident :db/valueType))
-              attrs)
-        (into (dc/q
-               {:find '[?ident ?type]
-                :where [(cons 'or
-                              (for [attr attrs]
-                                ['?eid (:db/ident attr)]))
-                        '[?eid ?attr]
-                        '[?attr :db/ident ?ident]
-                        '[?attr :db/valueType ?type-id]
-                        '[?type-id :db/ident ?type]
-                        '[(not= ?ident :db/ident)]]}
-               db))
-        sort)))
+  (->> table
+       (get (attrs-by-table db))
+       (map :db/ident)
+       (dc/q
+        '{:find [?attr ?type]
+          :where [[?e-schema :db/ident ?attr]
+                  [?e-schema :db/valueType ?e-type]
+                  [?e-type :db/ident ?type]]
+          :in [$ [?attr ...]]}
+        db)))
 
-(defn column-name [table-name col]
-  (if (= (namespace col)
+(defn column-name [table-name col-kw]
+  (if (= (namespace col-kw)
          table-name)
-    (name col)
-    (util/kw->str col)))
+    (name col-kw)
+    (util/kw->str col-kw)))
 
 (defn describe-table [database {table-name :name}]
   (let [db          (latest-db (get database :details))
@@ -170,6 +164,7 @@
   (attr-entities (latest-db raven-spec))
   (attrs-by-table (latest-db raven-spec))
   (derive-table-names (latest-db raven-spec))
+  (table-columns (latest-db raven-spec) "txn")
 
   (driver/describe-database
    :datomic-client
