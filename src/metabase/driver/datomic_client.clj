@@ -43,7 +43,7 @@
   (can-connect? db-spec))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;; driver/describe-database
+;;;; utils working with db/ident
 
 (def reserved-prefixes
   #{"fressian"
@@ -73,6 +73,9 @@
   ;; TODO(alan) Use pattern match to remove all datomic reserved prefixes
   (remove reserved-prefixes
           (keys (attrs-by-table db))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; driver/describe-database
 
 (defmethod driver/describe-database :datomic-client [_ instance]
   (let [db-spec (get instance :details)
@@ -152,13 +155,51 @@
 (defmethod driver/describe-table :datomic-client [_ database table]
   (describe-table database table))
 
-(def raven-spec
-  {:endpoint "localhost:8998"
-   :access-key "k"
-   :secret "s"
-   :db-name "m13n"})
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; driver/describe-table-fks
+
+(defn guess-column-dest [db table-names col]
+  (let [table? (into #{} table-names)
+        attrs (-> {:find '[?ident]
+                   :where [['_ col '?eid]
+                           '[?eid ?attr]
+                           '[?attr :db/ident ?ident]]}
+                  (dc/q db)
+                  (flatten))]
+    (or (some->> attrs
+                 (map namespace)
+                 (remove #{"db"})
+                 frequencies
+                 (sort-by val)
+                 last
+                 key)
+        (table? (name col)))))
+
+(defn describe-table-fks [database {table-name :name}]
+  (let [db     (latest-db (get database :details))
+        tables (derive-table-names db)
+        cols   (table-columns db table-name)]
+
+    (-> #{}
+        (into (for [[col type] cols
+                    :when      (= type :db.type/ref)
+                    :let       [dest (guess-column-dest db tables col)]
+                    :when      dest]
+                {:fk-column-name   (column-name table-name col)
+                 :dest-table       {:name   dest
+                                    :schema nil}
+                 :dest-column-name "db/id"})))))
+
+(defmethod driver/describe-table-fks :datomic-client [_ database table]
+  (describe-table-fks database table))
 
 (comment
+  (def raven-spec
+    {:endpoint "localhost:8998"
+     :access-key "k"
+     :secret "s"
+     :db-name "m13n"})
+
   (driver/can-connect? :datomic-client raven-spec)
 
   (attr-entities (latest-db raven-spec))

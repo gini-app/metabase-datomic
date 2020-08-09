@@ -1,6 +1,4 @@
-{:paths ["../metabase-datomic/src"
-         "../metabase-datomic/resources"
-         "src"
+{:paths ["src"
          "resources"]
  :deps  {}
 
@@ -42,13 +40,15 @@
   {:extra-deps {com.datomic/dev-local      {:mvn/version "0.9.183"}}}
 
   :dev
-  {:extra-paths ["../metabase-datomic/dev"]
+  {:extra-paths ["../metabase/src"
+                 "../metabase/test"
+                 "dev"]
    :extra-deps  {vvvvalvalval/scope-capture {:mvn/version "0.3.2"}}}
 
   :test
   {:extra-paths ["../metabase/src"
                  "../metabase/test"
-                 "../metabase-datomic/test"]
+                 "test"]
    :jvm-opts    ["-Dmb.db.file=metabase.datomic.test"
                  "-Dmb.jetty.port=3999"]
    :extra-deps  {lambdaisland/kaocha        {:mvn/version "0.0-418"}
