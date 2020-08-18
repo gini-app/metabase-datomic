@@ -1,10 +1,11 @@
 (ns metabase.driver.datomic
   (:require [datomic.api :as d]
             [metabase.driver :as driver]
-            [metabase.driver.datomic.query-processor :as datomic.qp]
-            [metabase.driver.datomic.util :as util]
-            [toucan.db :as db]
-            [clojure.tools.logging :as log]))
+            [metabase.query-processor.store :as qp.store]
+            [clojure.tools.logging :as log]
+
+            [metabase.driver.datomic.query-processor :as qp]
+            [metabase.driver.datomic.util :as util]))
 
 ; don't need this anymore since metabase is already updated
 (require 'metabase.driver.datomic.monkey-patch)
@@ -33,37 +34,43 @@
     (catch Exception e
       false)))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; driver/describe-database
+
 (defmethod driver/describe-database :datomic [_ instance]
-  (let [url (get-in instance [:details :db])
-        table-names (datomic.qp/derive-table-names (d/db (d/connect url)))]
+  (let [table-names
+        (-> instance (get-in [:details :db]) d/connect d/db
+            (->> (d/q qp/schema-attrs-q)
+                 (qp/derive-table-names)))]
     {:tables
      (set
       (for [table-name table-names]
         {:name   table-name
          :schema nil}))}))
 
-(derive :type/Keyword :type/Text)
+(defn user-config
+  ([]
+   (user-config (qp.store/database)))
+  ([mbdb]
+   (try
+     (let [edn (get-in mbdb [:details :config])]
+       (read-string (or edn "{}")))
+     (catch Exception e
+       (log/error e "Datomic EDN is not configured correctly.")
+       {}))))
 
-(def datomic->metabase-type
-  {:db.type/keyword :type/Keyword    ;; Value type for keywords.
-   :db.type/string  :type/Text       ;; Value type for strings.
-   :db.type/boolean :type/Boolean    ;; Boolean value type.
-   :db.type/long    :type/Integer    ;; Fixed integer value type. Same semantics as a Java long: 64 bits wide, two's complement binary representation.
-   :db.type/bigint  :type/BigInteger ;; Value type for arbitrary precision integers. Maps to java.math.BigInteger on Java platforms.
-   :db.type/float   :type/Float      ;; Floating point value type. Same semantics as a Java float: single-precision 32-bit IEEE 754 floating point.
-   :db.type/double  :type/Float      ;; Floating point value type. Same semantics as a Java double: double-precision 64-bit IEEE 754 floating point.
-   :db.type/bigdec  :type/Decimal    ;; Value type for arbitrary precision floating point numbers. Maps to java.math.BigDecimal on Java platforms.
-   :db.type/ref     :type/FK         ;; Value type for references. All references from one entity to another are through attributes with this value type.
-   :db.type/instant :type/DateTime   ;; Value type for instants in time. Stored internally as a number of milliseconds since midnight, January 1, 1970 UTC. Maps to java.util.Date on Java platforms.
-   :db.type/uuid    :type/UUID       ;; Value type for UUIDs. Maps to java.util.UUID on Java platforms.
-   :db.type/uri     :type/URL        ;; Value type for URIs. Maps to java.net.URI on Java platforms.
-   :db.type/bytes   :type/Array      ;; Value type for small binary data. Maps to byte array on Java platforms. See limitations.
+(defn tx-filter []
+  (when-let [form (get (user-config) :tx-filter)]
+    (eval form)))
 
-   ;; TODO(alan) Unhandled types
-   ;; :db.type/symbol
-   ;; :db.type/tuple
-   ;; :db.type/uri    causes error on FE (Reader can't process tag object)
-   })
+(defn db []
+  (let [db (-> (get-in (qp.store/database) [:details :db]) d/connect d/db)]
+    (if-let [pred (tx-filter)]
+      (d/filter db pred)
+      db)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; driver/describe-table
 
 (defn column-name [table-name col]
   (if (= (namespace col)
@@ -71,11 +78,13 @@
     (name col)
     (util/kw->str col)))
 
-(defn describe-table [database {table-name :name}]
-  (let [url         (get-in database [:details :db])
-        config      (datomic.qp/user-config database)
+(defn describe-table [mbdb {table-name :name}]
+  (let [url         (get-in mbdb [:details :db])
+        config      (user-config mbdb)
         db          (d/db (d/connect url))
-        cols        (datomic.qp/table-columns db table-name)
+        cols        (->> db
+                         (d/q qp/schema-attrs-q)
+                         (qp/table-columns table-name))
         rels        (get-in config [:relationships (keyword table-name)])
         xtra-fields (get-in config [:fields (keyword table-name)])]
     {:name   table-name
@@ -88,7 +97,7 @@
             :base-type     :type/PK
             :pk?           true}}
          (into (for [[col type] cols
-                     :let [mb-type (datomic->metabase-type type)]
+                     :let [mb-type (qp/datomic->metabase-type type)]
                      :when mb-type]
                  {:name          (column-name table-name col)
                   :database-type (util/kw->str type)
@@ -105,16 +114,15 @@
                   :base-type     type
                   :special-type  type})))}))
 
-(defmethod driver/describe-table :datomic [_ database table]
-  (describe-table database table))
+(defmethod driver/describe-table :datomic [_ mbdb table]
+  (describe-table mbdb table))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; driver/describe-table-fks
 
 (defn guess-dest-column [db table-names col]
   (let [table? (into #{} table-names)
-        attrs (d/q (assoc '{:find [[?ident ...]]}
-                     :where [['_ col '?eid]
-                             '[?eid ?attr]
-                             '[?attr :db/ident ?ident]])
-                   db)]
+        attrs (d/q qp/dest-columns-q db col)]
     (or (some->> attrs
                  (map namespace)
                  (remove #{"db"})
@@ -124,12 +132,13 @@
                  key)
         (table? (name col)))))
 
-(defn describe-table-fks [database {table-name :name}]
-  (let [url    (get-in database [:details :db])
+(defn describe-table-fks [mbdb {table-name :name}]
+  (let [url    (get-in mbdb [:details :db])
         db     (d/db (d/connect url))
-        config (datomic.qp/user-config database)
-        tables (datomic.qp/derive-table-names db)
-        cols   (datomic.qp/table-columns db table-name)
+        config (user-config mbdb)
+        schema (d/q qp/schema-attrs-q db)
+        tables (qp/derive-table-names schema)
+        cols   (qp/table-columns table-name schema)
         rels   (get-in config [:relationships (keyword table-name)])]
 
     (-> #{}
@@ -147,19 +156,55 @@
                               :schema nil}
                  :dest-column-name "db/id"})))))
 
-(defmethod driver/describe-table-fks :datomic [_ database table]
-  (describe-table-fks database table))
+(defmethod driver/describe-table-fks :datomic [_ mbdb table]
+  (describe-table-fks mbdb table))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; driver/mbql->native
 
 (defonce mbql-history (atom ()))
 (defonce query-history (atom ()))
 
-(defmethod driver/mbql->native :datomic [_ query]
-  (swap! mbql-history conj query)
-  (datomic.qp/mbql->native query))
+(defn db-facade [db]
+  (reify qp/DbFacade
+    (cardinality-many? [this attr]
+      (= :db.cardinality/many (:db/cardinality (d/entity db attr))))
+
+    (attr-type [this attr]
+      (get-in
+        (d/pull db [{:db/valueType [:db/ident]}] attr)
+        [:db/valueType :db/ident]))
+
+    (entid [this ident]
+      (d/entid db ident))))
+
+(defmethod driver/mbql->native :datomic [_ {mbqry :query
+                                            settings :settings}]
+  (swap! mbql-history conj mbqry)
+  (qp/mbql->native mbqry settings (db-facade (db))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; driver/execute-query
+
+(defn execute-query [{:keys [native query] :as native-query}]
+  (let [db      (db)
+        dqry    (qp/read-query (:query native))
+        results (d/q (dissoc dqry :fields) db (:rules (user-config)))
+        ;; Hacking around this is as it's so common in Metabase's automatic
+        ;; dashboards. Datomic never returns a count of zero, instead it just
+        ;; returns an empty result.
+        results (if (and (empty? results)
+                         (empty? (:breakout query))
+                         (#{[[:count]] [[:sum]]} (:aggregation query)))
+                  [[0]]
+                  results)]
+    (if query
+      (qp/result-map-mbql db results dqry query)
+      (qp/result-map-native db results dqry))))
 
 (defmethod driver/execute-query :datomic [_ native-query]
   (swap! query-history conj native-query)
-  (let [result (datomic.qp/execute-query native-query)]
+  (let [result (execute-query native-query)]
     (swap! query-history conj result)
     result))
 
@@ -173,5 +218,10 @@
    :datomic
    {:details {:db "datomic:dev://localhost:4334/m13n"}}
    {:name "merchant"})
+
+  (driver/describe-table-fks
+   :datomic
+   {:details {:db "datomic:dev://localhost:4334/m13n"}}
+   {:name "txn"})
 
   )

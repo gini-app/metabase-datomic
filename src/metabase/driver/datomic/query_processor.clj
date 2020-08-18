@@ -8,7 +8,7 @@
             [metabase.models.table :refer [Table]]
             [metabase.query-processor.store :as qp.store]
             [toucan.db :as db]
-            [clojure.tools.logging :as log]
+            ; [clojure.tools.logging :as log]
             [clojure.walk :as walk])
   (:import java.net.URI
            java.util.UUID))
@@ -21,9 +21,6 @@
 ;; attr  : A datomic attribute, i.e. a qualified keyword
 ;; ?foo / lvar : A logic variable, i.e. a symbol starting with a question mark
 
-(def connect #_(memoize d/connect)
-  d/connect)
-
 (defn user-config
   ([]
    (user-config (qp.store/database)))
@@ -32,21 +29,34 @@
      (let [edn (get-in database [:details :config])]
        (read-string (or edn "{}")))
      (catch Exception e
-       (log/error e "Datomic EDN is not configured correctly.")
+       #_(log/error e "Datomic EDN is not configured correctly.")
        {}))))
 
-(defn tx-filter []
-  (when-let [form (get (user-config) :tx-filter)]
-    (eval form)))
-
-(defn db []
-  (let [db (-> (get-in (qp.store/database) [:details :db]) connect d/db)]
-    (if-let [pred (tx-filter)]
-      (d/filter db pred)
-      db)))
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; SCHEMA
+;; SCHEMA - used by (describe-database, describe-table, describe-table-fks)
+
+(derive :type/Keyword :type/Text)
+
+(def datomic->metabase-type
+  {:db.type/keyword :type/Keyword
+   :db.type/string  :type/Text
+   :db.type/boolean :type/Boolean
+   :db.type/long    :type/Integer
+   :db.type/bigint  :type/BigInteger
+   :db.type/float   :type/Float
+   :db.type/double  :type/Float
+   :db.type/bigdec  :type/Decimal
+   :db.type/ref     :type/FK
+   :db.type/instant :type/DateTime
+   :db.type/uuid    :type/UUID
+   :db.type/uri     :type/URL
+   :db.type/bytes   :type/Array
+
+   ;; TODO(alan) Unhandled types
+   ;; :db.type/symbol
+   ;; :db.type/tuple
+   ;; :db.type/uri    causes error on FE (Reader can't process tag object)
+   })
 
 (def reserved-prefixes
   #{"fressian"
@@ -58,55 +68,44 @@
     "db.attr"
     "db.entity"})
 
-(defn attributes
-  "Query db for all attribute entities."
-  [db]
-  (->> db
-       (d/q '{:find [[?eid ...]] :where [[?eid :db/valueType]]})
-       (map (partial d/entity db))))
+(def schema-attrs-q
+  '{:find  [?attr ?type]
+    :keys  [db/ident db/valueType]
+    :where [[?schema-id :db/valueType ?type-id]
+            [?schema-id :db/ident ?attr]
+            [?type-id :db/ident ?type]]})
 
 (defn attrs-by-table
   "Map from table name to collection of attribute entities."
-  [db]
-  (reduce #(update %1 (namespace (:db/ident %2)) conj %2)
-          {}
-          (attributes db)))
+  [attrs]
+  (reduce #(update %1 (namespace (:db/ident %2)) conj %2) {} attrs))
 
 (defn derive-table-names
   "Find all \"tables\" i.e. all namespace prefixes used in attribute names."
-  [db]
+  [attrs]
   ;; TODO(alan) Use pattern match to remove all datomic reserved prefixes
   (remove reserved-prefixes
-          (keys (attrs-by-table db))))
+          (keys (attrs-by-table attrs))))
 
 (defn table-columns
   "Given the name of a \"table\" (attribute namespace prefix), find all attribute
   names that occur in entities that have an attribute with this prefix."
-  [db table]
-  {:pre [(instance? datomic.db.Db db)
-         (string? table)]}
-  (let [attrs (get (attrs-by-table db) table)]
-    (-> #{}
-        (into (map (juxt :db/ident :db/valueType))
-              attrs)
-        (into (d/q
-               {:find '[?ident ?type]
-                :where [(cons 'or
-                              (for [attr attrs]
-                                ['?eid (:db/ident attr)]))
-                        '[?eid ?attr]
-                        '[?attr :db/ident ?ident]
-                        '[?attr :db/valueType ?type-id]
-                        '[?type-id :db/ident ?type]
-                        '[(not= ?ident :db/ident)]]}
-               db))
-        sort)))
+  [table schema-attrs]
+  (-> schema-attrs attrs-by-table (get table)
+      (->> (map (juxt :db/ident :db/valueType))
+           (into (sorted-map)))))
+
+(def dest-columns-q
+  '{:find  [[?ident ...]]
+    :in    [$ ?col]
+    :where [[_ ?col ?eid]
+            [?eid ?attr]
+            [?attr :db/ident ?ident]]})
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; QUERY->NATIVE
 
 (def ^:dynamic *settings* {})
-
 (def ^:dynamic *mbqry* nil)
 
 (defn- timezone-id
@@ -116,25 +115,17 @@
 (defn source-table []
   (:source-table *mbqry* (:source-table (:source-query *mbqry*))))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
 (def ^:dynamic
   *db*
-  "Datomic db, for when we need to inspect the schema during query generation."
-  nil)
+  "Thread-local reified DbFacade")
 
-(defn cardinality-many?
-  "Is the given keyword an reference attribute with cardinality/many?"
-  [attr]
-  (= :db.cardinality/many (:db/cardinality (d/entity *db* attr))))
+(defprotocol DbFacade
+  "Facade over datomic libraries.
+   Allow query-processor be peer/client api agnostic."
 
-(defn attr-type [attr]
-  (get-in
-   (d/pull *db* [{:db/valueType [:db/ident]}] attr)
-   [:db/valueType :db/ident]))
-
-(defn entid [ident]
-  (d/entid *db* ident))
+  (cardinality-many? [this attr] "Is attribute a ref with cardinality/many?")
+  (attr-type [this attr] "What is :db/valueType of attribute")
+  (entid [this ident] "Wrapper for datomic.api/entid"))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Datalog query helpers
@@ -401,7 +392,7 @@
       [?e a ?v]
 
       ;; get-else is not supported on cardinality/many
-      (cardinality-many? a)
+      (cardinality-many? *db* a)
       (list 'or-join [?e ?v]
             [?e a ?v]
             (list 'and
@@ -409,7 +400,7 @@
                   [(list 'ground NIL-REF) ?v]))
 
       :else
-      [(%get-else% '$ ?e a (NIL_VALUES (attr-type a) ::nil)) ?v])))
+      [(%get-else% '$ ?e a (NIL_VALUES (attr-type *db* a) ::nil)) ?v])))
 
 (defn date-trunc-or-extract-some [unit date]
   (if (= NIL date)
@@ -503,7 +494,7 @@
   ;; insufficient bindings.
   (if-let [table (source-table)]
     (let [attr (keyword (:name (qp.store/table table)) literal)]
-      (if (attr-type attr)
+      (if (attr-type *db* attr)
         [(bind-attr (table-lvar table) attr (field-lvar field-ref))]
         []))
     []))
@@ -642,7 +633,7 @@
       "db.type/ref"
       (cond
         (and (string? v) (some #{\/} v))
-        (entid (keyword v))
+        (entid *db* (keyword v))
 
         (string? v)
         (Long/parseLong v)
@@ -949,11 +940,9 @@
       (apply-aggregations mbqry)
       (clean-up-with-clause)))
 
-(defn mbql->native [{database :database
-                     mbqry :query
-                     settings :settings}]
+(defn mbql->native [mbqry settings db-facade]
   (binding [*settings* settings
-            *db* (db)
+            *db* db-facade
             *mbqry* mbqry]
     {:query (-> mbqry
                 mbqry->dqry
@@ -1224,20 +1213,3 @@
             (recur key val qry res))
           res))
       qry)))
-
-
-(defn execute-query [{:keys [native query] :as native-query}]
-  (let [db      (db)
-        dqry    (read-query (:query native))
-        results (d/q (dissoc dqry :fields) db (:rules (user-config)))
-        ;; Hacking around this is as it's so common in Metabase's automatic
-        ;; dashboards. Datomic never returns a count of zero, instead it just
-        ;; returns an empty result.
-        results (if (and (empty? results)
-                         (empty? (:breakout query))
-                         (#{[[:count]] [[:sum]]} (:aggregation query)))
-                  [[0]]
-                  results)]
-    (if query
-      (result-map-mbql db results dqry query)
-      (result-map-native db results dqry))))
