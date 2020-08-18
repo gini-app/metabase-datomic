@@ -12,7 +12,7 @@
 
 (defn setup-first-user []
   (let [new-user (db/insert! User
-                   :email        "arne@example.com"
+                   :email        "alan@example.com"
                    :first_name   "dev"
                    :last_name    "dev"
                    :password     (str (java.util.UUID/randomUUID))
@@ -27,7 +27,7 @@
 
 (defn setup-database
   ([]
-   (setup-database "MusicBrainz" "datomic:free://localhost:4334/mbrainz" {}))
+   (setup-database "Enrichment" "datomic:dev://localhost:4334/m13n" {}))
   ([name url config]
    (let [dbinst (db/insert! Database
                   {:name name
@@ -42,7 +42,7 @@
 
 (defn remove-database
   ([]
-   (remove-database  "MusicBrainz"))
+   (remove-database  "Enrichment"))
   ([name]
    (remove-database name false))
   ([name remove-datomic-db?]
@@ -67,3 +67,9 @@
   (setup-first-user)
   (setup-site)
   (setup-database))
+
+(comment
+  (setup-first-user)
+  (setup-all)
+
+  )

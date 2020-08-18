@@ -30,13 +30,13 @@
         app                 (jit metabase.handler/app)
         init!               (jit metabase.core/init!)
         clean-up-in-mem-dbs (jit user.repl/clean-up-in-mem-dbs)]
-    (setup-db!)
-    (clean-up-in-mem-dbs)
+    #_(setup-db!)
+    #_(clean-up-in-mem-dbs)
     (start-web-server! app)
     (init!)
     (setup-driver!)
     (open-metabase)
-    ((jit user.repl/clean-up-in-mem-dbs))))
+    #_((jit user.repl/clean-up-in-mem-dbs))))
 
 (defn setup! []
   ((jit user.setup/setup-all)))
@@ -63,3 +63,8 @@
            '[user :refer :all]
            '[clojure.repl :refer :all]
            '[sc.api :refer :all]))
+
+(comment
+  (go)
+
+  )
