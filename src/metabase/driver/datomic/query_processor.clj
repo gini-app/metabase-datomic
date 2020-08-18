@@ -1,7 +1,6 @@
 (ns metabase.driver.datomic.query-processor
   (:require [clojure.set :as set]
             [clojure.string :as str]
-            [datomic.api :as d]
             [metabase.driver.datomic.util :as util :refer [pal par]]
             [metabase.mbql.util :as mbql.u]
             [metabase.models.field :as field :refer [Field]]
@@ -125,7 +124,8 @@
 
   (cardinality-many? [this attr] "Is attribute a ref with cardinality/many?")
   (attr-type [this attr] "What is :db/valueType of attribute")
-  (entid [this ident] "Wrapper for datomic.api/entid"))
+  (entid [this ident] "Wrapper for datomic.api/entid")
+  (entity [this eid] "Wrapper for datomic.api/entity"))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Datalog query helpers
@@ -279,6 +279,7 @@
   [& parts]
   (symbol
    (str "?" (str/join "|" (map (fn [p]
+                                 ;; Fix by replacing dots with dash
                                  (let [s (str p)]
                                    (cond-> s
                                      (= \: (first s))
@@ -1008,7 +1009,7 @@
         (let [value (nth row idx)]
           ;; Try to convert enum-style ident references back to keywords
           (if-let [attr-entity (and (integer? value) (ref? entity-fn attr))]
-            (or (d/ident (d/entity-db attr-entity) value)
+            (or (:db/ident (entity-fn value))
                 value)
             value))))))
 
@@ -1113,7 +1114,7 @@
                              ;; fields, but we don't want to replace false with
                              ;; nil in results.
                              (disj false))
-        entity-fn (memoize (fn [eid] (d/entity db eid)))]
+        entity-fn (memoize (fn [eid] (entity db eid)))]
     (->> result
          ;; TODO: This needs to be retought, we can only really order after
          ;; expanding set references (cartesian-product). Currently breaks when
@@ -1193,7 +1194,7 @@
 
 (defn result-map-native
   "Result map for a 'native' query entered directly by the user."
-  [db results dqry]
+  [results dqry]
   {:columns (map str (:find dqry))
    :rows (seq results)})
 

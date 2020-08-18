@@ -176,7 +176,10 @@
         [:db/valueType :db/ident]))
 
     (entid [this ident]
-      (d/entid db ident))))
+      (d/entid db ident))
+
+    (entity [this eid]
+      (d/entity db eid))))
 
 (defmethod driver/mbql->native :datomic [_ {mbqry :query
                                             settings :settings}]
@@ -199,8 +202,8 @@
                   [[0]]
                   results)]
     (if query
-      (qp/result-map-mbql db results dqry query)
-      (qp/result-map-native db results dqry))))
+      (qp/result-map-mbql (db-facade db) results dqry query)
+      (qp/result-map-native results dqry))))
 
 (defmethod driver/execute-query :datomic [_ native-query]
   (swap! query-history conj native-query)
