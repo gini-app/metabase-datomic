@@ -2,7 +2,7 @@
   (:require [datomic.client.api :as dc]
             [metabase.driver :as driver]
             [metabase.query-processor.store :as qp.store]
-
+            [metabase.driver.datomic.query-processor :as qp]
             [metabase.driver.datomic.util :as util]))
 
 (driver/register! :datomic-client)
@@ -27,6 +27,12 @@
    :expressions                            false
    :expression-aggregations                false
    :native-parameters                      false
+   :nested-fields                          false
+   :left-join                              false
+   :right-join                             false
+   :inner-join                             false
+   :full-join                              false
+   :set-timezone                           false
    :binning                                false})
 
 (doseq [[feature supported?] features]
@@ -192,6 +198,55 @@
 
 (defmethod driver/describe-table-fks :datomic-client [_ database table]
   (describe-table-fks database table))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; driver/mbql->native
+
+(defn db-facade [db]
+  (reify qp/DbFacade
+    (cardinality-many? [this attrid]
+      (= :db.cardinality/many
+         (get-in
+          (dc/pull db [{:db/cardinality [:db/ident]}] attrid)
+          [:db/cardinality :db/ident])))
+
+    (attr-type [this attrid]
+      (get-in
+       (dc/pull db [{:db/valueType [:db/ident]}] attrid)
+       [:db/valueType :db/ident]))
+
+    (entid [this ident]
+      (:e (dc/datoms db {:index      :avet
+                         :components [:db/ident ident]})))
+
+    (entity [this eid]
+      (dc/pull db '[*] eid))))
+
+(defmethod driver/mbql->native :datomic-client [_ {mbqry :query
+                                                   settings :settings}]
+  (qp/mbql->native mbqry settings (db-facade (latest-db))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; driver/execute-query
+
+(defn execute-query [{:keys [native query] :as native-query}]
+  (let [db      (latest-db)
+        dqry    (qp/read-query (:query native))
+        results (dc/q (dissoc dqry :fields) db nil #_(:rules (user-config)))
+      ;; Hacking around this is as it's so common in Metabase's automatic
+      ;; dashboards. Datomic never returns a count of zero, instead it just
+      ;; returns an empty result.
+        results (if (and (empty? results)
+                         (empty? (:breakout query))
+                         (#{[[:count]] [[:sum]]} (:aggregation query)))
+                  [[0]]
+                  results)]
+    (if query
+      (qp/result-map-mbql (db-facade db) results dqry query)
+      (qp/result-map-native results dqry))))
+
+(defmethod driver/execute-query :datomic-client [_ native-query]
+  (execute-query native-query))
 
 (comment
   (def raven-spec
