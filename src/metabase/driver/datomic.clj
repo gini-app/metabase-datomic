@@ -3,7 +3,6 @@
             [metabase.driver :as driver]
             [metabase.query-processor.store :as qp.store]
             [clojure.tools.logging :as log]
-
             [metabase.driver.datomic.query-processor :as qp]
             [metabase.driver.datomic.util :as util]))
 
@@ -11,6 +10,27 @@
 (require 'metabase.driver.datomic.monkey-patch)
 
 (driver/register! :datomic)
+
+(defn user-config
+  ([]
+   (user-config (qp.store/database)))
+  ([mbdb]
+   (try
+     (let [edn (get-in mbdb [:details :config])]
+       (read-string (or edn "{}")))
+     (catch Exception e
+       (log/error e "Datomic EDN is not configured correctly.")
+       {}))))
+
+(defn tx-filter []
+  (when-let [form (get (user-config) :tx-filter)]
+    (eval form)))
+
+(defn db []
+  (let [db (-> (get-in (qp.store/database) [:details :db]) d/connect d/db)]
+    (if-let [pred (tx-filter)]
+      (d/filter db pred)
+      db)))
 
 (def features
   {:basic-aggregations                     true
@@ -47,27 +67,6 @@
       (for [table-name table-names]
         {:name   table-name
          :schema nil}))}))
-
-(defn user-config
-  ([]
-   (user-config (qp.store/database)))
-  ([mbdb]
-   (try
-     (let [edn (get-in mbdb [:details :config])]
-       (read-string (or edn "{}")))
-     (catch Exception e
-       (log/error e "Datomic EDN is not configured correctly.")
-       {}))))
-
-(defn tx-filter []
-  (when-let [form (get (user-config) :tx-filter)]
-    (eval form)))
-
-(defn db []
-  (let [db (-> (get-in (qp.store/database) [:details :db]) d/connect d/db)]
-    (if-let [pred (tx-filter)]
-      (d/filter db pred)
-      db)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; driver/describe-table
@@ -167,12 +166,12 @@
 
 (defn db-facade [db]
   (reify qp/DbFacade
-    (cardinality-many? [this attr]
-      (= :db.cardinality/many (:db/cardinality (d/entity db attr))))
+    (cardinality-many? [this attrid]
+      (= :db.cardinality/many (:db/cardinality (d/entity db attrid))))
 
-    (attr-type [this attr]
+    (attr-type [this attrid]
       (get-in
-        (d/pull db [{:db/valueType [:db/ident]}] attr)
+        (d/pull db [{:db/valueType [:db/ident]}] attrid)
         [:db/valueType :db/ident]))
 
     (entid [this ident]

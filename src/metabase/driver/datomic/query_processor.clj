@@ -6,8 +6,8 @@
             [metabase.models.field :as field :refer [Field]]
             [metabase.models.table :refer [Table]]
             [metabase.query-processor.store :as qp.store]
-            [toucan.db :as db]
-            ; [clojure.tools.logging :as log]
+            [toucan.db :as tdb]
+            [clojure.tools.logging :as log]
             [clojure.walk :as walk])
   (:import java.net.URI
            java.util.UUID))
@@ -28,7 +28,7 @@
      (let [edn (get-in database [:details :config])]
        (read-string (or edn "{}")))
      (catch Exception e
-       #_(log/error e "Datomic EDN is not configured correctly.")
+       (log/error e "Datomic EDN is not configured correctly.")
        {}))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -214,7 +214,7 @@
 
 (defmethod field-inst :field-literal [[_ literal]]
   (when-let [table (source-table)]
-    (db/select-one Field :table_id table :name literal)))
+    (tdb/select-one Field :table_id table :name literal)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -825,7 +825,7 @@
         eid     (table-lvar table)]
     (if-let [custom-clause (get-in (user-config) [:inclusion-clauses (keyword (:name table))])]
       (walk/postwalk-replace {'?eid eid} custom-clause)
-      (let [fields  (db/select Field :table_id source-table)
+      (let [fields  (tdb/select Field :table_id source-table)
             attribs (->> fields
                          (remove (comp #{"metabase.driver.datomic/path" "metabase.driver.datomic/computed-field"} :database_type))
                          (map ->attrib)
