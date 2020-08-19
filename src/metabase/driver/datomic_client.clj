@@ -49,43 +49,14 @@
   (can-connect? db-spec))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;; utils working with db/ident
-
-(def reserved-prefixes
-  #{"fressian"
-    "db"
-    "db.alter"
-    "db.excise"
-    "db.install"
-    "db.sys"
-    "db.attr"
-    "db.entity"})
-
-(defn attr-entities
-  "Query db for all attribute entities."
-  [db]
-  (flatten (dc/qseq '{:find [(pull ?e [*])] :where [[?e :db/valueType]]} db)))
-
-(defn attrs-by-table
-  "Map from table name to collection of attribute entities."
-  [db]
-  (reduce #(update %1 (namespace (:db/ident %2)) conj %2)
-          {}
-          (attr-entities db)))
-
-(defn derive-table-names
-  "Find all \"tables\" i.e. all namespace prefixes used in attribute names."
-  [db]
-  ;; TODO(alan) Use pattern match to remove all datomic reserved prefixes
-  (remove reserved-prefixes
-          (keys (attrs-by-table db))))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; driver/describe-database
 
 (defmethod driver/describe-database :datomic-client [_ instance]
   (let [db-spec (get instance :details)
-        table-names (derive-table-names (latest-db db-spec))]
+        table-names (->> (latest-db db-spec)
+                         (dc/qseq qp/schema-attrs-q)
+                         (flatten)
+                         (qp/derive-table-names))]
     {:tables
      (set
       (for [tname table-names]
@@ -95,44 +66,6 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; driver/describe-table
 
-(derive :type/Keyword :type/Text)
-
-(def datomic->metabase-type
-  {:db.type/keyword :type/Keyword
-   :db.type/string  :type/Text
-   :db.type/boolean :type/Boolean
-   :db.type/long    :type/Integer
-   :db.type/bigint  :type/BigInteger
-   :db.type/float   :type/Float
-   :db.type/double  :type/Float
-   :db.type/bigdec  :type/Decimal
-   :db.type/ref     :type/FK
-   :db.type/instant :type/DateTime
-   :db.type/uuid    :type/UUID
-   :db.type/uri     :type/URL
-   :db.type/bytes   :type/Array
-
-   ;; TODO(alan) Unhandled types
-   ;; :db.type/symbol
-   ;; :db.type/tuple
-   ;; :db.type/uri    causes error on FE (Reader can't process tag object)
-   })
-
-(defn table-columns
-  "Given the name of a \"table\" (attribute namespace prefix), find all attribute
-  names that occur in entities that have an attribute with this prefix."
-  [db table]
-  (->> table
-       (get (attrs-by-table db))
-       (map :db/ident)
-       (dc/q
-        '{:find [?attr ?type]
-          :where [[?e-schema :db/ident ?attr]
-                  [?e-schema :db/valueType ?e-type]
-                  [?e-type :db/ident ?type]]
-          :in [$ [?attr ...]]}
-        db)))
-
 (defn column-name [table-name col-kw]
   (if (= (namespace col-kw)
          table-name)
@@ -141,7 +74,8 @@
 
 (defn describe-table [database {table-name :name}]
   (let [db          (latest-db (get database :details))
-        cols        (table-columns db table-name)]
+        schema      (dc/q qp/schema-attrs-q db)
+        cols        (qp/table-columns table-name schema)]
     {:name   table-name
      :schema nil
      ;; Fields *must* be a set
@@ -151,7 +85,7 @@
             :base-type     :type/PK
             :pk?           true}}
          (into (for [[col type] cols
-                     :let [mb-type (datomic->metabase-type type)]
+                     :let [mb-type (qp/datomic->metabase-type type)]
                      :when mb-type]
                  {:name          (column-name table-name col)
                   :database-type (util/kw->str type)
@@ -183,9 +117,9 @@
 
 (defn describe-table-fks [database {table-name :name}]
   (let [db     (latest-db (get database :details))
-        tables (derive-table-names db)
-        cols   (table-columns db table-name)]
-
+        schema (dc/q qp/schema-attrs-q db)
+        tables (qp/derive-table-names schema)
+        cols   (qp/table-columns table-name schema)]
     (-> #{}
         (into (for [[col type] cols
                     :when      (= type :db.type/ref)
@@ -232,7 +166,7 @@
 (defn execute-query [{:keys [native query] :as native-query}]
   (let [db      (latest-db)
         dqry    (qp/read-query (:query native))
-        results (dc/q (dissoc dqry :fields) db nil #_(:rules (user-config)))
+        results (dc/q (dissoc dqry :fields) db nil)
       ;; Hacking around this is as it's so common in Metabase's automatic
       ;; dashboards. Datomic never returns a count of zero, instead it just
       ;; returns an empty result.
@@ -257,10 +191,14 @@
 
   (driver/can-connect? :datomic-client raven-spec)
 
-  (attr-entities (latest-db raven-spec))
-  (attrs-by-table (latest-db raven-spec))
-  (derive-table-names (latest-db raven-spec))
-  (table-columns (latest-db raven-spec) "txn")
+  (->> raven-spec
+       (latest-db)
+       (dc/q qp/schema-attrs-q)
+       (qp/derive-table-names))
+  (->> raven-spec
+       (latest-db)
+       (dc/q qp/schema-attrs-q)
+       (qp/table-columns "txn"))
 
   (driver/describe-database
    :datomic-client
